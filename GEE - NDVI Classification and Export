@@ -1,0 +1,78 @@
+// Define some variables
+var boundingBox = ee.Geometry.Rectangle([-119.984, 49.032, -119.032, 50.001])
+var geometry = ee.FeatureCollection("users/geodesicsolutionsel/Okanagan_Study_Area");
+var l5bands = ['B5', 'B4', 'B3', 'B2']
+var l8bands = ['B6', 'B5', 'B4', 'B3']
+var STD_NAMES = ['swir1', 'nir','red', 'green']
+
+// Making NDVI map
+// Import Landsat 8 TOA images
+// Get the image in certain date. Extract the median values
+var l5image = ee.ImageCollection('LANDSAT/LT05/C02/T1') //https://developers.google.com/earth-engine/datasets/catalog/LANDSAT_LT05_C02_T1_TOA
+  .filterBounds(boundingBox)
+  .filterDate('1984-04-19', '2011-11-08');
+var l8image = ee.ImageCollection('LANDSAT/LC08/C02/T1') //https://developers.google.com/earth-engine/datasets/catalog/LANDSAT_LC08_C02_T1_TOA
+  .filterBounds(boundingBox)
+  .filterDate('2013-03-18', '2023-05-14');
+        
+// data for just growing season (april-october) - may have no images in a year
+// each year has its own scene (will need to loop through and build arrays of information)
+// want ndvi of each anual season 
+// output is a hydrograph showing the fluctuation of inundation area over the year
+
+        
+// 1. Get composite of landsat data with no clouds.
+var l5composite = ee.Algorithms.Landsat.simpleComposite({
+  collection: l5image,
+  cloudScoreRange: 10,
+  asFloat: true
+});
+var l8composite = ee.Algorithms.Landsat.simpleComposite({
+  collection: l8image,
+  cloudScoreRange: 10,
+  asFloat: true
+});
+
+// 2. Clip the image in a specified boundary.
+var l5composite = l5composite.clip(geometry);
+var l8composite = l8composite.clip(geometry);
+
+
+// 3. Select and rename Bands of interest
+var l5compbands = l5composite.select(l5bands)
+var l5compbands = l5compbands.rename(STD_NAMES)
+var l8compbands = l8composite.select(l8bands)
+var l8compbands = l8compbands.rename(STD_NAMES)
+
+// 4. Merge the Landsat 5 and Landsat 8 collections
+var mergedCollection = ee.ImageCollection(l5compbands).merge(l8compbands);
+var image = mergedCollection.reduce(ee.Reducer.median())
+var visParams = {bands: ['swir1_median', 'nir_median', 'red_median'], min: 0, max: 0.3};
+Map.addLayer(image, visParams, 'Merged Landsat Composite',false);
+Map.setCenter(-119.582982,49.781840, 9);
+
+// 5. Compute the NDVI 
+var nir = image.select('nir_median');
+var red = image.select('red_median');
+var ndvi = nir.subtract(red).divide(nir.add(red));
+var ndvi = ndvi.clip(geometry);
+Map.addLayer(ndvi, {min: 0, max: 1, palette: ['black', 'yellow', 'green']}, 'continuous NDVI',false);
+
+
+// 6. Classify NDVI into 5 classes
+var ndvi2 = ee.Image(1)
+          .where(ndvi.gt(0.0).and(ndvi.lte(0.2)), 2)
+          .where(ndvi.gt(0.2),3)
+var ndvi2 = ndvi2.clip(geometry);
+Map.addLayer(ndvi2, {min: 1, max: 5, palette: ['#654321','#FFA500','#FFFF00', '#00FF00', '#008000']}, 'Classified NDVI',true);
+
+// 5. Export and save to drive
+Export.image.toDrive({
+  image: ndvi,
+  description: 'NDVI',
+  scale: 30,
+  fileFormat: 'GeoTIFF',
+  region: geometry,
+  folder: 'OCCP',
+  maxPixels: '1000000000'
+});
