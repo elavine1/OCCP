@@ -1,0 +1,148 @@
+// Define some variables
+var boundingBox = ee.Geometry.Rectangle([-119.984, 49.032, -119.032, 50.001]);
+var geometry = ee.FeatureCollection("users/geodesicsolutionsel/Okanagan_Study_Area");
+var lakes = ee.FeatureCollection("users/geodesicsolutionsel/FWLKSPL_polygon");
+var rivers = ee.FeatureCollection("users/geodesicsolutionsel/FWRVRSPL_polygon");
+var water = lakes.merge(rivers)
+var l5bands = ['B5', 'B4', 'B3', 'B2'];
+var l8bands = ['B6', 'B5', 'B4', 'B3'];
+var STD_NAMES = ['swir1', 'nir','red', 'green'];
+var l5yearStart = 1984;
+var l5yearEnd = 2011;
+var l8yearStart = 2013;
+var l8yearEnd = 2022;
+
+// Date loop creation
+function generateSeasonalStartDate(startYear, endYear) {
+  // Create an empty list to store the dates
+  var dateList = [];
+  // Generate the dates for each year from startYear to endYear
+  for (var year = startYear; year <= endYear; year++) {
+    // Format the date as YYYY-MM-DD
+    var dateString = year + '-04-01';
+    // Add the formatted date to the list
+    dateList.push(dateString);
+  }
+  // Return the list of dates
+  return dateList;
+}
+
+// Generate date list for each Landsat period
+var l5dateList = generateSeasonalStartDate(l5yearStart, l5yearEnd);
+var l8dateList = generateSeasonalStartDate(l8yearStart, l8yearEnd);
+
+// Convert the list of dates to ee.List
+var l5eeDateList = ee.List(l5dateList);
+var l8eeDateList = ee.List(l8dateList);
+
+// Function to get a Landsat 5 image for each seasonal annual period
+var l5getImage = function(date) {
+  var startDate = ee.Date(date);
+  var endDate = startDate.advance(213, 'day');
+  // Filter Landsat imagery by date range
+  var image = ee.ImageCollection('LANDSAT/LT05/C02/T1') //https://developers.google.com/earth-engine/datasets/catalog/LANDSAT_LT05_C02_T1
+    .filterDate(startDate, endDate)
+    .filterBounds(boundingBox); // Replace 'geometry' with your region of interest
+  //Get composite of landsat data with no clouds.
+  var composite = ee.Algorithms.Landsat.simpleComposite({
+    collection: image,
+    cloudScoreRange: 10,
+    asFloat: true});
+  // Clip the image in a specified boundary.
+  var clippedcomposite = composite.clip(geometry);
+  // Select and rename Bands of interest.
+  var compbands = clippedcomposite.select(l5bands);
+  var finalcomp = compbands.rename(STD_NAMES);
+  return finalcomp;
+};
+
+// Function to get a Landsat 8 image for each seasonal annual period
+var l8getImage = function(date) {
+  var startDate = ee.Date(date);
+  var endDate = startDate.advance(213, 'day');
+  // Filter Landsat imagery by date range
+  var image = ee.ImageCollection('LANDSAT/LC08/C02/T1') //https://developers.google.com/earth-engine/datasets/catalog/LANDSAT_LC08_C02_T1
+    .filterDate(startDate, endDate)
+    .filterBounds(boundingBox); // Replace 'geometry' with your region of interest
+  //Get composite of landsat data with no clouds.
+  var composite = ee.Algorithms.Landsat.simpleComposite({
+    collection: image,
+    cloudScoreRange: 10,
+    asFloat: true});
+  // Clip the image in a specified boundary.
+  var clippedcomposite = composite.clip(geometry);
+  // Select and rename Bands of interest.
+  var compbands = clippedcomposite.select(l8bands);
+  var finalcomp = compbands.rename(STD_NAMES);
+  return finalcomp;
+};
+
+// Get threshold for water based on 1 image
+var datetitle = "2022-04-01";
+var l8singledate = [datetitle];
+var l8singledate = ee.List(l8singledate);
+var l8singledate = l8singledate.map(l8getImage);
+var bufferedWater = water.map(function(feature){
+  return feature.geometry().buffer(-30);
+});
+for (var i = 0; i < l8singledate.length().getInfo(); i++) {
+  var image = ee.Image(l8singledate.get(i));
+  var nir = image.select('nir');
+  var red = image.select('red');
+  var ndvi = nir.subtract(red).divide(nir.add(red));
+  var clippedndvi = ndvi.clip(bufferedWater);
+  Map.addLayer(clippedndvi, {min: 0, max: 1, palette: ['black', 'yellow', 'green']}, 'Single L8 NDVI ',false);
+}
+for (var i = 0; i < l8singledate.length().getInfo(); i++) {
+  var image = ee.Image(l8singledate.get(i));
+  var swir1 = image.select('swir1');
+  var green = image.select('green');
+  var MNDWI = green.subtract(swir1).divide(green.add(swir1));
+  var clippedMNDWI = MNDWI.clip(bufferedWater);
+  Map.addLayer(clippedMNDWI, {min: 0, max: 1, palette: ['black', 'yellow', 'green']}, 'Single L8 MNDWI ',false);
+}
+
+
+// Map the getImage function over the date list
+var l5imageList = l5eeDateList.map(l5getImage);
+var l8imageList = l8eeDateList.map(l8getImage);
+
+// NDVI of each Landsat 5 image
+for (var i = 0; i < l5imageList.length().getInfo(); i++) {
+  var image = ee.Image(l5imageList.get(i));
+  var nir = image.select('nir');
+  var red = image.select('red');
+  var ndvi = nir.subtract(red).divide(nir.add(red));
+  var datetitle = ee.String(l5eeDateList.get(i)).getInfo()
+  Map.addLayer(ndvi, {min: 0, max: 1, palette: ['black', 'yellow', 'green']}, 'Landsat 5 Image NDVI ' + datetitle);
+}
+
+// NDVI of each Landsat 8 image
+for (var i = 0; i < l8imageList.length().getInfo(); i++) {
+  var image = ee.Image(l8imageList.get(i));
+  var nir = image.select('nir');
+  var red = image.select('red');
+  var ndvi = nir.subtract(red).divide(nir.add(red));
+  var datetitle = ee.String(l8eeDateList.get(i)).getInfo()
+  Map.addLayer(ndvi, {min: 0, max: 1, palette: ['black', 'yellow', 'green']}, 'Landsat 8 Image NDVI ' + datetitle);
+}
+
+// MNDWI of each Landsat 5 image
+for (var i = 0; i < l5imageList.length().getInfo(); i++) {
+  var image = ee.Image(l5imageList.get(i));
+  var swir1 = image.select('swir1');
+  var green = image.select('green');
+  var MNDWI = green.subtract(swir1).divide(green.add(swir1));
+  var datetitle = ee.String(l5eeDateList.get(i)).getInfo()
+  Map.addLayer(MNDWI, {min: 0, max: 1, palette: ['black', 'yellow', 'green']}, 'Landsat 5 Image MNDWI ' + datetitle);
+}
+
+// MNDWI of each Landsat 8 image
+for (var i = 0; i < l8imageList.length().getInfo(); i++) {
+  var image = ee.Image(l8imageList.get(i));
+  var swir1 = image.select('swir1');
+  var green = image.select('green');
+  var MNDWI = green.subtract(swir1).divide(green.add(swir1));
+  var datetitle = ee.String(l8eeDateList.get(i)).getInfo()
+  Map.addLayer(MNDWI, {min: 0, max: 1, palette: ['black', 'yellow', 'green']}, 'Landsat 8 Image MNDWI ' + datetitle);
+}
